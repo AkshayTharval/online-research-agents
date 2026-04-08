@@ -119,7 +119,7 @@
 ---
 
 ## Task 9 — Write pytest unit tests
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `tests/test_retry.py` — tests `llm_retry` and `web_retry`: verifies retry count, correct exceptions are caught, non-retryable exceptions bubble immediately
