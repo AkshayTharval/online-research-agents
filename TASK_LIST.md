@@ -132,7 +132,7 @@
 ---
 
 ## Task 10 — Write end-to-end integration test
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `tests/test_integration.py`

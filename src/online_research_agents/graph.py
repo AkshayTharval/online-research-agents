@@ -1,7 +1,8 @@
 """LangGraph state graph — parallel search workers + sequential extract/verify/write."""
 
 import logging
-from typing import Any
+import operator
+from typing import Annotated, Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
@@ -11,7 +12,22 @@ from online_research_agents.agents import (
     search_agent,
     verification_agent,
 )
-from online_research_agents.models import RawSource, ResearchState
+from online_research_agents.models import ResearchState
+
+
+# ---------------------------------------------------------------------------
+# TypedDict state schema for LangGraph
+# Annotated[list, operator.add] on raw_sources tells LangGraph to concatenate
+# lists returned by the three parallel search nodes before merge_sources fires.
+# ---------------------------------------------------------------------------
+
+class _GraphState(TypedDict):
+    topic: str
+    num_claims: int
+    raw_sources: Annotated[list, operator.add]
+    claims: list
+    verified_claims: list
+    essay: str
 
 logger = logging.getLogger(__name__)
 
@@ -118,34 +134,7 @@ def build_graph() -> Any:
     Returns:
         A compiled LangGraph graph ready for .invoke(state_dict).
     """
-    # Use a dict-based state with a reducer on raw_sources so LangGraph
-    # accumulates lists from parallel nodes before calling merge_sources.
-    from typing import Annotated
-    import operator
-
-    def _merge_lists(a: list, b: list) -> list:
-        """Reducer: concatenate raw_sources lists from parallel nodes."""
-        return (a or []) + (b or [])
-
-    # Annotated state schema — raw_sources uses a custom list-merge reducer
-    # so parallel node outputs are concatenated rather than overwritten.
-    class _State(dict):
-        pass
-
-    from langgraph.graph.state import StateGraph as _SG
-
-    graph: Any = StateGraph(
-        # Inline TypedDict-style annotation for the reducer
-        # LangGraph accepts a plain dict schema with Annotated reducers
-        {
-            "topic": str,
-            "num_claims": int,
-            "raw_sources": Annotated[list, _merge_lists],
-            "claims": list,
-            "verified_claims": list,
-            "essay": str,
-        }
-    )
+    graph: Any = StateGraph(_GraphState)
 
     # Parallel search worker nodes
     graph.add_node("search_news",     _search_news_node)

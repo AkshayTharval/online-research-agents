@@ -40,3 +40,7 @@ packages = ["src/online_research_agents"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m 'not integration'"
+markers = [
+    "integration: marks tests that hit real external APIs (run with 'pytest -m integration')",
+]
