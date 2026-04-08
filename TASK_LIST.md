@@ -31,7 +31,7 @@
 ---
 
 ## Task 3 — Implement Search Agent
-**Status:** TODO _(needs refactor for parallel search worker architecture)_
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/agents/search_agent.py`
@@ -95,7 +95,7 @@
 ---
 
 ## Task 7 — Wire agents into a LangGraph state graph
-**Status:** TODO _(needs refactor for parallel search worker architecture)_
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/graph.py`
