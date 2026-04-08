@@ -21,6 +21,23 @@ QueryAngle = Literal["news", "academic", "general"]
 MIN_SOURCES_PER_WORKER = 5
 MAX_RESULTS_PER_QUERY = 10
 
+# Domains excluded from scraping — aggregators and mirrors that dominate
+# DuckDuckGo results but are secondary sources themselves.
+# Wikipedia cites primary sources; we want those primary sources directly.
+EXCLUDED_DOMAINS: frozenset[str] = frozenset({
+    "en.wikipedia.org",
+    "wikipedia.org",
+    "simple.wikipedia.org",
+    "en.m.wikipedia.org",
+    "wikidata.org",
+    "wikimedia.org",
+    "wikiwand.com",          # Wikipedia mirror
+    "dbpedia.org",           # Wikipedia-derived
+    "answers.com",           # content farm
+    "ask.com",               # content farm
+    "quora.com",             # crowdsourced, low reliability
+})
+
 _ANGLE_INSTRUCTIONS: dict[str, str] = {
     "news": (
         "Focus on RECENT NEWS and current events: headlines, latest developments, "
@@ -150,6 +167,15 @@ def run(state: ResearchState, query_angle: QueryAngle = "general") -> ResearchSt
 
             seen_urls.add(url)
 
+            domain = _extract_domain(url)
+            if domain in EXCLUDED_DOMAINS:
+                logger.debug(
+                    "[%s] Skipping excluded domain: %s",
+                    query_angle.upper(),
+                    domain,
+                )
+                continue
+
             try:
                 text = _scrape_url(url)
             except Exception as exc:
@@ -169,7 +195,6 @@ def run(state: ResearchState, query_angle: QueryAngle = "general") -> ResearchSt
                 )
                 continue
 
-            domain = _extract_domain(url)
             sources.append(RawSource(url=url, domain=domain, text=text))
             logger.info(
                 "[%s] Collected source %d: %s (%d chars)",
