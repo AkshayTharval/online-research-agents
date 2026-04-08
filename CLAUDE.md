@@ -32,7 +32,7 @@ A multi-agent research pipeline that takes a topic, runs three parallel web-sear
 # 1. Create venv and install (including dev deps)
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev]"   # registers the package — MUST run before streamlit or pytest
 
 # 2. Add your Groq API key
 cp .env.example .env
