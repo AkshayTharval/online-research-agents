@@ -48,7 +48,7 @@
 ---
 
 ## Task 4 — Implement Extraction Agent
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/agents/extraction_agent.py`
