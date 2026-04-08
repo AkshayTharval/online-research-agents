@@ -129,10 +129,10 @@ def _run_with_live_output(topic: str, num_claims: int) -> ResearchState:
     verify_exp  = st.expander("✅ Verification Agent — cross-checking claims", expanded=True)
     essay_exp   = st.expander("✍️ Essay Writer — composing essay", expanded=True)
 
-    search_log  = search_exp.container()
-    extract_log = extract_exp.container()
-    verify_log  = verify_exp.container()
-    essay_log   = essay_exp.container()
+    search_log  = search_exp.container(height=300)
+    extract_log = extract_exp.container(height=250)
+    verify_log  = verify_exp.container(height=300)
+    essay_log   = essay_exp.container(height=200)
 
     # Graph-level banners (=== Agent starting ===) go to a top-level area
     graph_log = st.container()
