@@ -95,7 +95,7 @@ This opens **http://localhost:8501** in your browser automatically.
 
 ### What you'll see
 
-![Streamlit UI Screenshot](docs/screenshots/ui.png)
+> Screenshot will be added here once Task 12 (UI) is complete.
 
 The UI shows live output from each agent as the pipeline runs — sources being collected, claims being extracted, verification results, and the final essay with citations.
 
