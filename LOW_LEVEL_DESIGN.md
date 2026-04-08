@@ -6,43 +6,52 @@ The system takes a research **topic** as input, automatically gathers informatio
 
 It is structured as a **pipeline of four specialized agents** wired together using **LangGraph**, a framework for building stateful, graph-based AI workflows. Each agent does one focused job. A single shared data structure (`ResearchState`) flows through every agent, with each agent reading what it needs and writing its output back into it.
 
+The system can be invoked in two ways:
+- **CLI** — `uv run research --topic "..." --num-claims 8` prints the essay and verification summary to stdout
+- **Streamlit UI** — `uv run streamlit run src/online_research_agents/ui.py` opens a browser-based interface where the user types a topic and watches every agent step execute in real time
+
 ---
 
 ## 2. High-Level Flow
 
 ```
-User CLI Input
-  --topic "climate change"
-  --num-claims 8
-        |
-        v
-  ResearchState (initial)
-  { topic, num_claims }
-        |
-        v
- ┌─────────────────┐
- │  Search Agent   │  Gathers raw web content (≥15 sources)
- └────────┬────────┘
-          |  state.raw_sources filled
-          v
- ┌─────────────────────┐
- │  Extraction Agent   │  Pulls N factual claims from sources
- └──────────┬──────────┘
-            |  state.claims filled
-            v
- ┌──────────────────────┐
- │  Verification Agent  │  Cross-checks each claim on the web
- └──────────┬───────────┘
-            |  state.verified_claims filled
-            v
- ┌─────────────────────┐
- │  Essay Writer Agent │  Writes essay using only verified claims
- └──────────┬──────────┘
-            |  state.essay filled
-            v
-     Final Output (stdout)
-     - Essay with inline citations
-     - Verification summary
+        ┌──────────────────────┐       ┌──────────────────────────┐
+        │  CLI (main.py)       │       │  Streamlit UI (ui.py)    │
+        │  --topic "..."       │       │  Topic text input        │
+        │  --num-claims 8      │       │  num_claims slider       │
+        └──────────┬───────────┘       └────────────┬─────────────┘
+                   │                                │
+                   └──────────────┬─────────────────┘
+                                  │ Creates ResearchState { topic, num_claims }
+                                  v
+                         build_graph().invoke(state)
+                                  │
+                                  v
+                    ┌─────────────────┐
+                    │  Search Agent   │  Gathers raw web content (≥15 sources)
+                    └────────┬────────┘
+                             │  state.raw_sources filled
+                             v
+                    ┌─────────────────────┐
+                    │  Extraction Agent   │  Pulls N factual claims from sources
+                    └──────────┬──────────┘
+                               │  state.claims filled
+                               v
+                    ┌──────────────────────┐
+                    │  Verification Agent  │  Cross-checks each claim on the web
+                    └──────────┬───────────┘
+                               │  state.verified_claims filled
+                               v
+                    ┌─────────────────────┐
+                    │  Essay Writer Agent │  Writes essay from verified claims
+                    └──────────┬──────────┘
+                               │  state.essay filled
+                               v
+               ┌───────────────────────────────┐
+               │  CLI: prints essay + table    │
+               │  UI:  renders essay + table   │
+               │       + download button       │
+               └───────────────────────────────┘
 ```
 
 ---
@@ -310,7 +319,109 @@ Execution sequence:
 
 ---
 
-## 7. File Structure
+## 7. Streamlit Web UI (`ui.py`)
+
+### 7.1 Purpose
+
+The UI gives non-technical users a browser-based way to run the full pipeline while watching every internal step happen in real time — no terminal required. It uses the **exact same LangGraph graph** as the CLI; the only difference is how input is collected and how output is rendered.
+
+### 7.2 Layout
+
+```
+┌─────────────────────┬──────────────────────────────────────────────┐
+│  SIDEBAR            │  MAIN AREA                                   │
+│                     │                                              │
+│  Topic:             │  ▼ Search Agent          [live log lines]    │
+│  [____________]     │    ✓ bbc.com (4,231 chars)                   │
+│                     │    ✓ reuters.com (3,890 chars)               │
+│  Num Claims: [8]    │    ✓ nature.com (2,100 chars) ...            │
+│                     │                                              │
+│  [Run Research]     │  ▼ Extraction Agent       [live log lines]   │
+│                     │    • Global temps rose 1.1°C [bbc.com]       │
+│                     │    • CO2 at 421 ppm [reuters.com] ...        │
+│                     │                                              │
+│                     │  ▼ Verification Agent     [live log lines]   │
+│                     │    VERIFIED   | claim... | reuters.com       │
+│                     │    UNVERIFIED | claim... | —                 │
+│                     │                                              │
+│                     │  ▼ Essay Writer           [spinner → essay]  │
+│                     │    Climate change represents...              │
+│                     │                                              │
+│                     │  ── Final Output ──                          │
+│                     │    [Full essay as Markdown]                  │
+│                     │    [Verification summary table]              │
+│                     │    [Download Essay .txt]                     │
+└─────────────────────┴──────────────────────────────────────────────┘
+```
+
+### 7.3 Live Log Capture — `StreamlitLogHandler`
+
+The key mechanism that makes the UI verbose is a custom `logging.Handler` subclass:
+
+```
+StreamlitLogHandler
+│
+├── Attached to the root logger at app startup
+├── Each agent already logs via logging.getLogger(__name__)
+│     → these records are automatically captured
+│
+├── on each log record:
+│     INFO    → st.write("ℹ " + message)          normal text
+│     WARNING → st.warning("⚠ " + message)        amber box
+│     ERROR   → st.error("✖ " + message)          red box
+│
+└── writes into the active st.container() for the current agent section
+```
+
+No changes are needed in the agent code — because they already use Python's standard `logging` module, the handler intercepts their output automatically.
+
+### 7.4 Per-Agent Expander Sections
+
+Each agent gets a `st.expander` that opens automatically when the agent starts and stays expanded when it finishes:
+
+| Expander | What it shows live |
+|---|---|
+| Search Agent | Each `RawSource` URL + domain + char count as it is collected |
+| Extraction Agent | Each `Claim` as a bullet: claim text + source domain |
+| Verification Agent | A growing table: claim \| VERIFIED/UNVERIFIED badge \| corroboration URL |
+| Essay Writer | A spinner while the LLM writes, then the full essay in `st.markdown` |
+
+### 7.5 Execution Model
+
+```
+User clicks "Run Research"
+        │
+        ▼
+st.session_state["running"] = True
+        │
+        ▼
+StreamlitLogHandler attached to root logger
+        │
+        ▼
+build_graph().invoke(ResearchState(...))
+  [runs synchronously in the Streamlit main thread]
+  [each agent's log.info() calls → StreamlitLogHandler → st.write()]
+        │
+        ▼
+st.session_state["result"] = final_state
+st.session_state["running"] = False
+        │
+        ▼
+Final output section rendered (essay + table + download button)
+```
+
+**Why synchronous?** Streamlit's execution model reruns the script top-to-bottom on every interaction. Running the graph synchronously keeps the state simple — `st.session_state` holds the result and log buffer between reruns.
+
+### 7.6 How to Launch
+
+```bash
+uv run streamlit run src/online_research_agents/ui.py
+# Opens http://localhost:8501 in the browser automatically
+```
+
+---
+
+## 8. File Structure
 
 ```
 online-research-agents/
@@ -328,12 +439,13 @@ online-research-agents/
 │       ├── retry.py              # @llm_retry, @web_retry (Task 2)
 │       ├── graph.py              # LangGraph StateGraph wiring (Task 7)
 │       ├── main.py               # CLI entrypoint (Task 8)
+│       ├── ui.py                 # Streamlit web UI (Task 12)
 │       └── agents/
 │           ├── __init__.py
-│           ├── search_agent.py      # Task 3
-│           ├── extraction_agent.py  # Task 4
+│           ├── search_agent.py       # Task 3
+│           ├── extraction_agent.py   # Task 4
 │           ├── verification_agent.py # Task 5
-│           └── essay_agent.py       # Task 6
+│           └── essay_agent.py        # Task 6
 │
 └── tests/
     ├── __init__.py
@@ -347,7 +459,7 @@ online-research-agents/
 
 ---
 
-## 8. Data Flow Diagram (end-to-end)
+## 9. Data Flow Diagram (end-to-end)
 
 ```
 CLI: --topic "climate change" --num-claims 8
@@ -423,12 +535,25 @@ CLI: --topic "climate change" --num-claims 8
 └──────────────────────────────────────────────────────────────┘
           |
           v
-     stdout: essay + verification table
+     ┌────────────────────────────────────┐
+     │  CLI stdout                        │
+     │  - essay text                      │
+     │  - verification summary table      │
+     └────────────────────────────────────┘
+          OR
+     ┌────────────────────────────────────┐
+     │  Streamlit UI (browser)            │
+     │  - live log lines per agent        │
+     │  - per-agent expander sections     │
+     │  - essay rendered as Markdown      │
+     │  - verification table with badges  │
+     │  - download essay as .txt          │
+     └────────────────────────────────────┘
 ```
 
 ---
 
-## 9. External Dependencies and Why Each Was Chosen
+## 10. External Dependencies and Why Each Was Chosen
 
 | Dependency | Role | Why |
 |---|---|---|
@@ -441,10 +566,11 @@ CLI: --topic "climate change" --num-claims 8
 | `pydantic` | Data models and validation | Type-safe state; prevents agents from passing malformed data |
 | `pydantic-settings` | Config from environment | Reads `.env` automatically with type coercion |
 | `python-dotenv` | Load `.env` file | Works alongside pydantic-settings for `.env` loading |
+| `streamlit` | Web UI framework | Python-native, zero-JS, built-in support for live updates via `st.write()` and `st.status()`; no separate frontend needed |
 
 ---
 
-## 10. Key Design Decisions
+## 11. Key Design Decisions
 
 **Why not one big function?**
 Separating into four agents means each is independently testable. You can mock just DuckDuckGo for the Search Agent tests without touching the LLM at all.
@@ -457,3 +583,6 @@ If retry behavior needs to change (e.g., increase max attempts), it changes in o
 
 **Why cross-domain verification?**
 A claim sourced from `bbc.com` that is also on `bbc.com` proves nothing — it's the same source. A claim that appears on both `bbc.com` and `reuters.com` is genuinely corroborated by an independent source.
+
+**Why Streamlit for the UI instead of Flask/FastAPI + React?**
+Streamlit lets us write the entire UI in Python with zero JavaScript. Since all agents already use Python's `logging` module, a single custom `logging.Handler` intercepts every log line and routes it to the correct UI section — no additional instrumentation in the agent code is required. A Flask + React approach would need a websocket layer, a separate frontend build step, and frontend code, all for the same result.
