@@ -40,9 +40,9 @@ def _build_references_section(citations: dict[int, VerifiedClaim]) -> str:
     """Build the References block appended to the end of the essay."""
     lines = ["", "---", "**References**", ""]
     for n, claim in citations.items():
-        lines.append(f"[{n}] {claim.source_url}")
+        lines.append(f"- **[{n}]** {claim.source_url}")
         if claim.corroboration_url:
-            lines.append(f"    Corroborated by: {claim.corroboration_url}")
+            lines.append(f"  - *Corroborated by:* {claim.corroboration_url}")
     return "\n".join(lines)
 
 
@@ -100,8 +100,13 @@ def run(state: ResearchState) -> ResearchState:
     )
 
     citations = _build_citation_list(verified_only)
+
+    for n, claim in citations.items():
+        logger.info("  [%d] %s — %s", n, claim.claim[:80], claim.source_domain)
+
     facts_block = _build_facts_block(citations)
 
+    logger.info("Sending %d facts to LLM for essay composition...", len(citations))
     essay_body = _write_essay(state.topic, facts_block, len(verified_only), _build_llm())
 
     references = _build_references_section(citations)

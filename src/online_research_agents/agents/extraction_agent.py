@@ -115,4 +115,13 @@ def run(state: ResearchState) -> ResearchState:
     else:
         logger.info("Extracted %d claims successfully", len(claims))
 
+    for i, claim in enumerate(claims, start=1):
+        logger.info(
+            "  [%d/%d] \"%s\" — %s",
+            i,
+            len(claims),
+            claim.claim[:90],
+            claim.source_domain,
+        )
+
     return state.model_copy(update={"claims": claims})

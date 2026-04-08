@@ -65,7 +65,7 @@ class StreamlitLogHandler(logging.Handler):
             elif record.levelno >= logging.WARNING:
                 container.warning(msg)
             else:
-                container.markdown(f"<small>`{msg}`</small>", unsafe_allow_html=True)
+                container.caption(msg)
         except Exception:
             pass  # Never let a logging error crash the UI
 
