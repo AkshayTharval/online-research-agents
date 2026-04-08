@@ -63,7 +63,7 @@
 ---
 
 ## Task 5 — Implement Verification Agent
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/agents/verification_agent.py`
