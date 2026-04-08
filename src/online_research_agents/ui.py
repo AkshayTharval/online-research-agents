@@ -69,11 +69,11 @@ class StreamlitLogHandler(logging.Handler):
         except Exception:
             pass  # Never let a logging error crash the UI
 
-    def _resolve(self, logger_name: str) -> str:
+    def _resolve(self, logger_name: str) -> str | None:
         for fragment, key in self._ROUTES.items():
             if fragment in logger_name:
                 return key
-        return "graph"
+        return None  # unknown logger — discard silently
 
 
 # ---------------------------------------------------------------------------
@@ -139,19 +139,26 @@ def _run_with_live_output(topic: str, num_claims: int) -> ResearchState:
     verify_log  = verify_status.container(height=300)
     essay_log   = essay_status.container(height=200)
 
+    # graph-level banners (=== round N starting ===) appear in a plain container
+    graph_log = st.container()
+
     containers = {
         "search":  search_log,
         "extract": extract_log,
         "verify":  verify_log,
         "write":   essay_log,
-        # graph-level banners (=== starting/complete ===) go here
-        "graph":   st.container(),
+        "graph":   graph_log,
     }
 
-    # Suppress noisy third-party library loggers (httpx, trafilatura, groq, etc.)
-    # before attaching our handler so they never reach the UI.
-    _NOISY_LOGGERS = ["httpx", "httpcore", "trafilatura", "urllib3",
-                      "groq", "_client", "charset_normalizer", "LangChain"]
+    # Suppress noisy third-party library loggers before attaching our handler.
+    # _resolve() returns None for any logger not in _ROUTES, so this is a belt-
+    # and-suspenders defence: level suppression stops them at the source, and
+    # the None guard in emit() drops anything that still slips through.
+    _NOISY_LOGGERS = [
+        "httpx", "httpcore", "trafilatura", "urllib3", "urllib",
+        "requests", "groq", "_client", "charset_normalizer",
+        "LangChain", "langchain", "langsmith", "openai",
+    ]
     original_levels: dict[str, int] = {}
     for name in _NOISY_LOGGERS:
         lg = logging.getLogger(name)
