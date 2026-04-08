@@ -47,14 +47,26 @@ def _ddg_result(url: str, title: str = "Global temps rose pre-industrial climate
 # ---------------------------------------------------------------------------
 
 class TestIsTopicallyRelevant:
-    def test_relevant_when_keywords_match(self):
+    def test_relevant_when_named_entity_matches(self):
         result = {"title": "MS Dhoni cricket debut India", "body": "Dhoni made his cricket debut in 2004"}
         assert _is_topically_relevant(result, "MS Dhoni made his international cricket debut in 2004") is True
 
-    def test_irrelevant_when_no_keywords_match(self):
-        """mayoclinic MS=multiple-sclerosis should not corroborate an MS Dhoni cricket claim."""
+    def test_irrelevant_mayoclinic_for_dhoni_claim(self):
+        """mayoclinic (MS=Multiple Sclerosis) must not corroborate an MS Dhoni cricket claim."""
         result = {"title": "Multiple sclerosis symptoms causes", "body": "MS is a disease affecting the nervous system"}
         assert _is_topically_relevant(result, "MS Dhoni made his international cricket debut in 2004") is False
+
+    def test_irrelevant_when_generic_words_only_match(self):
+        """'team' and 'international' on a medical page must not pass for a cricket claim."""
+        result = {
+            "title": "International patient care team",
+            "body": "Our international team provides medical care",
+        }
+        assert _is_topically_relevant(result, "MS Dhoni captained the Indian national team") is False
+
+    def test_relevant_when_icc_appears_in_result(self):
+        result = {"title": "ICC ODI Player of the Year 2008 Dhoni", "body": "Dhoni won ICC award"}
+        assert _is_topically_relevant(result, "MS Dhoni won the ICC ODI Player of the Year award") is True
 
     def test_allows_when_no_result_text(self):
         """If result has no title/body we can't disqualify it — allow."""

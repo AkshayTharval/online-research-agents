@@ -57,35 +57,69 @@ _STOPWORDS: frozenset[str] = frozenset({
     "such", "into", "than", "then", "only", "said", "were", "about", "after",
 })
 
+# Capitalised words that look like proper nouns but are too generic to be
+# discriminating — e.g. "Indian", "International", "World" appear on any site.
+_GENERIC_CAPITALIZED: frozenset[str] = frozenset({
+    "indian", "international", "national", "world", "united", "states",
+    "first", "second", "third", "new", "great", "general", "former",
+    "team", "cup", "year", "award", "player", "series",
+})
+
 
 def _is_topically_relevant(result: dict, claim_text: str) -> bool:
     """
-    Return True if the result title/snippet shares at least 2 meaningful
-    keywords with the claim text.
+    Return True if the result title/snippet is genuinely about the same topic
+    as the claim.
 
-    This prevents false-positive corroboration where DuckDuckGo returns an
-    unrelated page that happens to be on a different domain — e.g. a search
-    for 'MS Dhoni' returning mayoclinic.org because 'MS' matches
-    'Multiple Sclerosis'.
+    Two-gate check:
+      Gate 1 (named-entity gate) — if the claim contains specific proper nouns
+        (e.g. "Dhoni", "Chennai", "ICC"), at least ONE must appear in the
+        result.  This blocks false positives like mayoclinic.org corroborating
+        an MS Dhoni cricket claim just because "MS" = Multiple Sclerosis.
+      Gate 2 (keyword gate) — at least 2 meaningful content words from the
+        claim must appear in the result (same as before).
+
+    Both gates must pass when named entities are present; only Gate 2 applies
+    when the claim contains no named entities.
     """
-    meaningful_words = [
-        w.strip(".,;:!?\"'()").lower()
-        for w in claim_text.split()
-        if len(w) > 3 and w.strip(".,;:!?\"'()").lower() not in _STOPWORDS
+    words = claim_text.split()
+    clean = [w.strip(".,;:!?\"'()[]") for w in words]
+
+    # Named entities: capitalised words (anywhere except position 0 which is
+    # always capitalised), longer than 2 chars, not generically capitalised.
+    named_entities = [
+        w.lower() for i, w in enumerate(clean)
+        if w and w[0].isupper() and len(w) > 2
+        and w.lower() not in _GENERIC_CAPITALIZED
+        and w.lower() not in _STOPWORDS
+        and (i > 0 or len(words) == 1)  # skip sentence-start capital
     ]
-    if not meaningful_words:
-        return True  # nothing to compare against — allow
+
+    # Meaningful content words (for Gate 2)
+    meaningful = [
+        w.lower() for w in clean
+        if len(w) > 3 and w.lower() not in _STOPWORDS
+    ]
 
     result_text = (
         (result.get("title") or "") + " " + (result.get("body") or "")
     ).lower()
 
     if not result_text.strip():
-        return True  # no snippet text — allow (can't disqualify)
+        return True  # can't check — allow
 
-    matches = sum(1 for w in meaningful_words if w in result_text)
-    threshold = min(2, len(meaningful_words))
-    return matches >= threshold
+    # Gate 1: named-entity presence
+    if named_entities:
+        if not any(entity in result_text for entity in named_entities):
+            return False
+
+    # Gate 2: keyword overlap
+    if meaningful:
+        matches = sum(1 for w in meaningful if w in result_text)
+        if matches < min(2, len(meaningful)):
+            return False
+
+    return True
 
 
 def _find_cross_domain_result(
