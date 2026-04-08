@@ -78,7 +78,7 @@
 ---
 
 ## Task 6 — Implement Essay Writer Agent
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/agents/essay_agent.py`
