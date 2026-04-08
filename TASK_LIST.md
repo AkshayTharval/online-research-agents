@@ -161,7 +161,7 @@
 ---
 
 ## Task 12 — Build Streamlit web UI
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - Add `streamlit>=1.40.0` to `pyproject.toml` dependencies
