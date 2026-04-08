@@ -159,6 +159,7 @@
 - How to run tests: `uv run pytest` (unit) and `uv run pytest -m integration` (integration)
 - Description of each agent and the LangGraph flow
 - Notes on rate limits, retry behavior, and Groq free tier constraints
+- **UI screenshot** — a `docs/screenshots/ui.png` image embedded in the README showing the Streamlit app with a live research run in progress (sidebar input, per-agent expanders, essay output). Screenshot is taken after Task 12 (UI) is complete and the app is run end-to-end once.
 
 ---
 
