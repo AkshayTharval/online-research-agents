@@ -38,12 +38,15 @@ def _build_facts_block(citations: dict[int, VerifiedClaim]) -> str:
 
 def _build_references_section(citations: dict[int, VerifiedClaim]) -> str:
     """Build the References block appended to the end of the essay."""
-    lines = ["", "---", "**References**", ""]
+    ref_items: list[str] = []
     for n, claim in citations.items():
-        lines.append(f"- **[{n}]** {claim.source_url}")
+        entry = f"**[{n}]** {claim.source_url}"
         if claim.corroboration_url:
-            lines.append(f"  - *Corroborated by:* {claim.corroboration_url}")
-    return "\n".join(lines)
+            # Two trailing spaces = hard line break within the same block
+            entry += f"  \n*Corroborated by:* {claim.corroboration_url}"
+        ref_items.append(entry)
+    # Blank line between each reference = guaranteed separate paragraph in markdown
+    return "\n\n---\n\n**References**\n\n" + "\n\n".join(ref_items)
 
 
 @llm_retry
