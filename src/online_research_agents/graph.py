@@ -12,7 +12,7 @@ from online_research_agents.agents import (
     search_agent,
     verification_agent,
 )
-from online_research_agents.models import ResearchState
+from online_research_agents.models import ResearchState, VerificationStatus, VerifiedClaim
 
 
 # ---------------------------------------------------------------------------
@@ -30,6 +30,12 @@ class _GraphState(TypedDict):
     essay: str
 
 logger = logging.getLogger(__name__)
+
+# Minimum fraction of claims that must be VERIFIED before writing the essay.
+# If a round falls below this, another search-extract-verify round is triggered.
+VERIFICATION_THRESHOLD: float = 0.50
+# Hard cap on total rounds (initial + boost rounds) to avoid indefinite looping.
+MAX_PIPELINE_ROUNDS: int = 3
 
 
 # ---------------------------------------------------------------------------
@@ -168,18 +174,104 @@ def build_graph() -> Any:
     return compiled
 
 
+def _build_partial_graph() -> Any:
+    """
+    Compile a graph that runs search → merge → extract → verify but stops
+    before the essay writer.  Used by the retry loop in run_pipeline so that
+    the essay is only written once, after enough claims are verified.
+    """
+    graph: Any = StateGraph(_GraphState)
+
+    graph.add_node("search_news",     _search_news_node)
+    graph.add_node("search_academic", _search_academic_node)
+    graph.add_node("search_general",  _search_general_node)
+    graph.add_node("merge_sources",   _merge_sources_node)
+    graph.add_node("extract",         _extraction_node)
+    graph.add_node("verify",          _verification_node)
+
+    graph.add_edge(START, "search_news")
+    graph.add_edge(START, "search_academic")
+    graph.add_edge(START, "search_general")
+    graph.add_edge("search_news",     "merge_sources")
+    graph.add_edge("search_academic", "merge_sources")
+    graph.add_edge("search_general",  "merge_sources")
+    graph.add_edge("merge_sources",   "extract")
+    graph.add_edge("extract",         "verify")
+    graph.add_edge("verify",          END)
+
+    return graph.compile()
+
+
+def _run_partial_pipeline(topic: str, num_claims: int) -> ResearchState:
+    """Run one search-extract-verify round and return the resulting state."""
+    partial = _build_partial_graph()
+    initial = ResearchState(topic=topic, num_claims=num_claims)
+    result_dict = partial.invoke(initial.model_dump())
+    return ResearchState(**result_dict)
+
+
 def run_pipeline(topic: str, num_claims: int = 8) -> ResearchState:
     """
-    Convenience wrapper: build the graph, invoke it, return a ResearchState.
+    Orchestrate the full research pipeline with a verification boost loop.
+
+    Runs search → extract → verify up to MAX_PIPELINE_ROUNDS times, merging
+    newly discovered verified claims each round.  Once at least
+    VERIFICATION_THRESHOLD of all accumulated claims are VERIFIED (or the
+    round cap is hit), runs the essay writer once on the final merged pool.
 
     Args:
         topic:      The research topic string.
-        num_claims: Number of claims to extract (default 8).
+        num_claims: Claims to extract per round (default 8).
 
     Returns:
-        Fully populated ResearchState after all agents have run.
+        Fully populated ResearchState including the final essay.
     """
-    initial = ResearchState(topic=topic, num_claims=num_claims)
-    graph = build_graph()
-    result_dict = graph.invoke(initial.model_dump())
-    return ResearchState(**result_dict)
+    all_verified: list[VerifiedClaim] = []
+    seen_claim_texts: set[str] = set()
+    last_round_state: ResearchState | None = None
+
+    for round_num in range(1, MAX_PIPELINE_ROUNDS + 1):
+        logger.info("=== Pipeline round %d/%d starting ===", round_num, MAX_PIPELINE_ROUNDS)
+
+        round_state = _run_partial_pipeline(topic, num_claims)
+        last_round_state = round_state
+
+        # Merge unique verified claims from this round into the running pool
+        for vc in round_state.verified_claims:
+            if vc.claim not in seen_claim_texts:
+                seen_claim_texts.add(vc.claim)
+                all_verified.append(vc)
+
+        total = len(all_verified)
+        verified_count = sum(
+            1 for vc in all_verified if vc.status == VerificationStatus.VERIFIED
+        )
+        rate = verified_count / total if total > 0 else 0.0
+
+        logger.info(
+            "=== Round %d complete: %d/%d verified overall (%.0f%%) ===",
+            round_num, verified_count, total, 100 * rate,
+        )
+
+        if rate >= VERIFICATION_THRESHOLD:
+            logger.info("=== Verification threshold met — proceeding to essay writer ===")
+            break
+
+        if round_num < MAX_PIPELINE_ROUNDS:
+            logger.info(
+                "=== Only %.0f%% verified (threshold %.0f%%) — running boost round %d ===",
+                100 * rate, 100 * VERIFICATION_THRESHOLD, round_num + 1,
+            )
+        else:
+            logger.warning(
+                "=== Max rounds reached with %.0f%% verified — proceeding anyway ===",
+                100 * rate,
+            )
+
+    # Build a merged state using the last round's sources/claims as context,
+    # but with ALL accumulated verified claims (across all rounds).
+    assert last_round_state is not None
+    merged_state = last_round_state.model_copy(update={"verified_claims": all_verified})
+
+    logger.info("=== Essay Writer starting ===")
+    return essay_agent.run(merged_state)
