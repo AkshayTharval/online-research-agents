@@ -26,12 +26,28 @@ The system can be invoked in two ways:
                                   v
                          build_graph().invoke(state)
                                   │
-                                  v
-                    ┌─────────────────┐
-                    │  Search Agent   │  Gathers raw web content (≥15 sources)
-                    └────────┬────────┘
-                             │  state.raw_sources filled
-                             v
+                         ┌────────┴────────┐
+                         │   LangGraph     │
+                         │  fan-out (×3)   │
+                         └──┬────┬────┬───┘
+                            │    │    │
+               ┌────────────┘    │    └────────────┐
+               ▼                 ▼                 ▼
+    ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐
+    │ Search Agent    │ │ Search Agent    │ │ Search Agent    │
+    │ angle: "news"   │ │ angle:"academic"│ │ angle:"general" │
+    │ (≥5 sources)    │ │ (≥5 sources)    │ │ (≥5 sources)    │
+    └────────┬────────┘ └────────┬────────┘ └────────┬────────┘
+             │                   │                   │
+             └──────────┬────────┘                   │
+                        └──────────────┬─────────────┘
+                                       ▼
+                           ┌───────────────────────┐
+                           │   merge_sources node  │  Deduplicates by URL
+                           │   (≥15 sources total) │  across all 3 workers
+                           └───────────┬───────────┘
+                                       │  state.raw_sources filled
+                                       v
                     ┌─────────────────────┐
                     │  Extraction Agent   │  Pulls N factual claims from sources
                     └──────────┬──────────┘
@@ -122,39 +138,57 @@ Usage: any function that calls Groq gets `@llm_retry`; any function that calls D
 
 ### 4.2 Search Agent (`agents/search_agent.py`)
 
-**Responsibility:** Gather raw text content from at least 15 distinct web sources for the given topic.
+**Responsibility:** One of three parallel workers that each gather raw web content from at least 5 distinct sources, focused on a specific angle of the topic. The three workers run simultaneously in LangGraph and their outputs are merged before Extraction.
 
-**Step-by-step logic:**
+**Three parallel instances and their angles:**
+
+| Instance | `query_angle` | Query focus |
+|---|---|---|
+| `search_news` | `"news"` | Recent events, headlines, latest developments |
+| `search_academic` | `"academic"` | Research papers, statistics, scientific findings |
+| `search_general` | `"general"` | Broad overviews, causes, effects, solutions |
+
+**Step-by-step logic (per worker):**
 
 ```
-1. Call Groq LLM (with @llm_retry) to generate 5 diverse search queries
-   for the topic.
-   e.g. topic = "climate change" →
+1. Call Groq LLM (with @llm_retry) to generate 5 queries biased toward
+   the given query_angle.
+   e.g. topic = "climate change", query_angle = "academic" →
         queries = [
-          "climate change scientific evidence",
-          "global warming effects 2024",
-          "greenhouse gas emissions data",
-          "climate change policy solutions",
-          "IPCC report findings"
+          "climate change peer reviewed research 2024",
+          "greenhouse gas emissions scientific data",
+          "IPCC sixth assessment report findings",
+          "climate sensitivity studies",
+          "carbon cycle research papers"
         ]
 
-2. For each query, call DuckDuckGo (with @web_retry) to get search results
-   (URLs + snippets). Paginate if needed.
+2. For each query, call DuckDuckGo (with @web_retry) to get search results.
 
-3. For each unique URL not yet visited:
+3. For each unique URL not yet visited by this worker:
    a. Call trafilatura.fetch_url(url)   ← downloads the page (with @web_retry)
    b. Call trafilatura.extract(html)    ← strips nav/ads, returns clean text
    c. If text is non-empty:
       - Parse domain from URL
       - Append RawSource(url, domain, text) to collected list
 
-4. Keep looping across queries/pages until len(collected) >= 15.
+4. Keep looping until len(collected) >= 5 (per worker target).
 
-5. Write collected list into state.raw_sources and return state.
+5. Return a partial state dict with only raw_sources populated.
+   The merge_sources node combines all three workers' results.
+```
+
+**merge_sources node:**
+```
+- Receives raw_sources from all 3 workers (up to 15+ total)
+- Deduplicates by URL across all three lists
+- Writes the combined deduplicated list into state.raw_sources
+- Logs total unique sources collected
 ```
 
 **Key decisions:**
-- Deduplication is by URL (a `set` of seen URLs).
+- Each worker targets ≥5 sources (not 15) — three workers together reliably exceed 15.
+- Deduplication within a worker is by URL set; cross-worker deduplication happens in the merge node.
+- `query_angle` is injected via the LangGraph node wrapper, not the `ResearchState` — state stays clean.
 - If trafilatura returns None (paywalled, JS-only pages), the URL is skipped silently.
 - Domain is extracted from URL using `urllib.parse.urlparse(url).netloc` to strip `www.`.
 
@@ -263,38 +297,72 @@ Write list[VerifiedClaim] into state.verified_claims and return state.
 
 ## 5. LangGraph Wiring (`graph.py`)
 
-LangGraph treats each agent as a **node** in a directed graph. Edges define execution order. The state flows from node to node automatically.
+LangGraph treats each agent as a **node** in a directed graph. Edges define execution order. Multiple edges from `START` to different nodes cause LangGraph to execute those nodes **in parallel**.
+
+### 5.1 Full Graph Topology
+
+```
+START → search_news     ─┐
+START → search_academic  ├─→ merge_sources → extract → verify → write → END
+START → search_general  ─┘
+```
+
+### 5.2 Conceptual Code Structure
 
 ```python
 # Conceptual structure (not exact code)
 
-graph = StateGraph(ResearchState)
+graph = StateGraph(dict)
 
-graph.add_node("search",    search_agent.run)
-graph.add_node("extract",   extraction_agent.run)
-graph.add_node("verify",    verification_agent.run)
-graph.add_node("write",     essay_agent.run)
+# Three parallel search workers — each wraps search_agent.run()
+# with a different query_angle injected at the node level
+graph.add_node("search_news",     lambda s: search_agent.run(s, query_angle="news"))
+graph.add_node("search_academic", lambda s: search_agent.run(s, query_angle="academic"))
+graph.add_node("search_general",  lambda s: search_agent.run(s, query_angle="general"))
 
-graph.set_entry_point("search")
-graph.add_edge("search",  "extract")
-graph.add_edge("extract", "verify")
-graph.add_edge("verify",  "write")
-graph.set_finish_point("write")
+# Merge node — combines raw_sources from all three workers
+graph.add_node("merge_sources", _merge_sources_node)
+
+# Sequential pipeline after merge
+graph.add_node("extract", _extraction_node)
+graph.add_node("verify",  _verification_node)
+graph.add_node("write",   _essay_node)
+
+# Fan-out: START triggers all three search workers simultaneously
+graph.add_edge(START, "search_news")
+graph.add_edge(START, "search_academic")
+graph.add_edge(START, "search_general")
+
+# Fan-in: all three workers feed into merge
+graph.add_edge("search_news",     "merge_sources")
+graph.add_edge("search_academic", "merge_sources")
+graph.add_edge("search_general",  "merge_sources")
+
+# Sequential from merge onward
+graph.add_edge("merge_sources", "extract")
+graph.add_edge("extract",       "verify")
+graph.add_edge("verify",        "write")
+graph.add_edge("write",         END)
 
 compiled_graph = graph.compile()
 ```
 
-**How execution works:**
-1. `compiled_graph.invoke(initial_state)` is called.
-2. LangGraph calls `search_agent.run(state)` → gets back updated state.
-3. Automatically calls `extraction_agent.run(state)` with the updated state.
-4. Continues through `verify` → `write`.
-5. Returns the final `ResearchState` with all fields populated.
+### 5.3 How Execution Works
 
-**Why LangGraph instead of plain function calls?**
-- Built-in state management and serialization.
-- Easy to add conditional edges later (e.g., retry search if fewer than 15 sources found).
-- Graph is inspectable and debuggable (`.get_graph().draw_ascii()`).
+1. `compiled_graph.invoke(initial_state_dict)` is called.
+2. LangGraph detects three edges from `START` → launches `search_news`, `search_academic`, `search_general` **concurrently** (in separate threads).
+3. Each worker collects ≥5 sources and returns its partial state dict.
+4. Once **all three** workers finish, LangGraph calls `merge_sources` with their combined outputs.
+5. `merge_sources` deduplicates by URL and writes the merged list to `state["raw_sources"]`.
+6. Continues sequentially: `extract` → `verify` → `write`.
+7. Returns the final state dict, which is cast back to `ResearchState`.
+
+### 5.4 Why LangGraph Instead of Plain Function Calls?
+
+- **Native parallelism** — edges from `START` to multiple nodes triggers concurrent execution with no manual threading code.
+- **Built-in state merging** — LangGraph handles passing each parallel node's output into the merge node automatically.
+- **Inspectable** — `.get_graph().draw_ascii()` prints the full topology for debugging.
+- **Extensible** — conditional edges can be added later (e.g., re-run search if merge yields fewer than 10 sources).
 
 ---
 
@@ -462,31 +530,37 @@ online-research-agents/
 ## 9. Data Flow Diagram (end-to-end)
 
 ```
-CLI: --topic "climate change" --num-claims 8
+CLI/UI: topic="climate change", num_claims=8
           |
           | Creates ResearchState { topic, num_claims=8 }
           v
-┌──────────────────────────────────────────────────────────────┐
-│ SEARCH AGENT                                                 │
-│                                                              │
-│  Groq LLM ──generates──> 5 search queries                   │
-│                                   |                          │
-│              ┌────────────────────┘                          │
-│              | for each query                                │
-│              v                                               │
-│         DuckDuckGo ──returns──> list of URLs                 │
-│              |                                               │
-│              | for each URL                                  │
-│              v                                               │
-│         trafilatura ──scrapes──> clean article text          │
-│              |                                               │
-│              └──> RawSource { url, domain, text }            │
-│                         (repeat until 15 sources)            │
-│                                                              │
-│  state.raw_sources = [RawSource × 15+]                       │
-└──────────────────────────────────────────────────────────────┘
-          |
-          v
+          LangGraph fan-out — all three start simultaneously
+          |              |               |
+          v              v               v
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ SEARCH AGENT │ │ SEARCH AGENT │ │ SEARCH AGENT │
+│ angle: news  │ │angle:academic│ │angle: general│
+│              │ │              │ │              │
+│ LLM → 5     │ │ LLM → 5     │ │ LLM → 5     │
+│ queries      │ │ queries      │ │ queries      │
+│              │ │              │ │              │
+│ DDG → URLs  │ │ DDG → URLs  │ │ DDG → URLs  │
+│ trafilatura  │ │ trafilatura  │ │ trafilatura  │
+│ → text       │ │ → text       │ │ → text       │
+│              │ │              │ │              │
+│ ≥5 sources   │ │ ≥5 sources   │ │ ≥5 sources   │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │
+       └────────────────┴────────────────┘
+                        |
+                        v
+          ┌─────────────────────────────┐
+          │      merge_sources node     │
+          │  Deduplicate by URL         │
+          │  raw_sources = ≥15 unique   │
+          └─────────────┬───────────────┘
+                        |
+                        v
 ┌──────────────────────────────────────────────────────────────┐
 │ EXTRACTION AGENT                                             │
 │                                                              │
@@ -583,6 +657,12 @@ If retry behavior needs to change (e.g., increase max attempts), it changes in o
 
 **Why cross-domain verification?**
 A claim sourced from `bbc.com` that is also on `bbc.com` proves nothing — it's the same source. A claim that appears on both `bbc.com` and `reuters.com` is genuinely corroborated by an independent source.
+
+**Why parallel search workers instead of one sequential search agent?**
+The search phase is the slowest part of the pipeline — each of the 15+ sources requires a DuckDuckGo call plus a `trafilatura` page fetch. Running three concurrent workers (news / academic / general) cuts the wall-clock time for the search phase from ~3× to ~1× while also producing more diverse sources. Each worker focuses on a distinct query angle, so the resulting `raw_sources` pool has better coverage than if the same 15 queries all came from one undirected search. The merge node's URL-based deduplication ensures no source is processed twice.
+
+**Why only parallelise search and not verification?**
+Verification is slower per-claim but bounded — `num_claims` is typically small (8–20) and each DuckDuckGo call is fast. More importantly, splitting verification into batches requires order-preserving merging of `list[VerifiedClaim]` to match claim indices, adding fiddly merge logic. The search parallelism gives the largest absolute time saving for the least implementation complexity.
 
 **Why Streamlit for the UI instead of Flask/FastAPI + React?**
 Streamlit lets us write the entire UI in Python with zero JavaScript. Since all agents already use Python's `logging` module, a single custom `logging.Handler` intercepts every log line and routes it to the correct UI section — no additional instrumentation in the agent code is required. A Flask + React approach would need a websocket layer, a separate frontend build step, and frontend code, all for the same result.

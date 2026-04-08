@@ -31,19 +31,21 @@
 ---
 
 ## Task 3 — Implement Search Agent
-**Status:** DONE
+**Status:** TODO _(needs refactor for parallel search worker architecture)_
 
 **What's included:**
 - `src/online_research_agents/agents/search_agent.py`
-- Accepts `ResearchState`, returns updated state with `raw_sources` populated
-- Generates multiple DuckDuckGo queries from the topic (using the Groq LLM to diversify queries)
-- Iterates pages of results until **at least 15 distinct URLs** are collected
-- Scrapes each URL with `trafilatura.fetch_url` + `trafilatura.extract` for clean text
-- Deduplicates by URL; extracts domain from URL for later cross-domain checks
-- Applies `web_retry` decorator to the scraping call
-- Applies `llm_retry` decorator to the LLM query-generation call
+- Accepts `ResearchState` **plus a `query_angle: str` parameter** (`"news"`, `"academic"`, `"general"`) so the agent can be instantiated as one of three parallel workers, each focused on a different angle of the topic
+- `query_angle` is passed to the Groq LLM prompt, which generates 5 queries biased toward that angle:
+  - `"news"` → recent events, headlines, latest developments
+  - `"academic"` → research papers, statistics, scientific findings
+  - `"general"` → broad overviews, causes, effects, solutions
+- Each worker independently iterates DuckDuckGo results and scrapes pages with `trafilatura` until it has collected **at least 5 distinct sources** (3 workers × 5 = 15+ total after merge)
+- Deduplicates by URL within the worker; cross-worker deduplication happens in the `merge_sources` node in the graph
+- Applies `web_retry` to scraping calls and `llm_retry` to the LLM query-generation call
 - Skips pages where `trafilatura` returns empty/None text
-- Logs progress (number of sources collected so far)
+- Logs progress per source collected, including which angle is running
+- Returns a **partial** `ResearchState` with only `raw_sources` populated (the graph merge node combines all three)
 
 ---
 
@@ -93,15 +95,26 @@
 ---
 
 ## Task 7 — Wire agents into a LangGraph state graph
-**Status:** DONE
+**Status:** TODO _(needs refactor for parallel search worker architecture)_
 
 **What's included:**
 - `src/online_research_agents/graph.py`
 - Defines `build_graph()` returning a compiled `StateGraph`
-- Nodes: `search` → `extract` → `verify` → `write_essay`
-- Edges wired in sequence; `ResearchState` is the shared state type
-- Each node function wraps the corresponding agent's `run(state)` method
-- Graph is compiled with `graph.compile()` and returned for use in CLI and tests
+- **Parallel fan-out from START:** three search worker nodes run simultaneously:
+  - `search_news` — calls `search_agent.run(state, query_angle="news")`
+  - `search_academic` — calls `search_agent.run(state, query_angle="academic")`
+  - `search_general` — calls `search_agent.run(state, query_angle="general")`
+- **`merge_sources` node:** collects outputs from all three workers, deduplicates `raw_sources` by URL across workers, writes the combined list back into state
+- Sequential nodes after merge: `extract` → `verify` → `write`
+- Full graph topology:
+  ```
+  START → search_news     ─┐
+  START → search_academic  ├─→ merge_sources → extract → verify → write → END
+  START → search_general  ─┘
+  ```
+- Each node logs `=== [Agent] starting/complete ===` banners
+- `build_graph()` returns the compiled graph; `run_pipeline(topic, num_claims)` is the convenience wrapper used by both CLI and UI
+- Graph is compiled with `graph.compile()` and returned for use in CLI, UI, and tests
 
 ---
 
