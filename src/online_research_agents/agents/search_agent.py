@@ -59,6 +59,11 @@ def _build_llm() -> ChatGroq:
     return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model)
 
 
+def _build_fallback_llm() -> ChatGroq:
+    settings = get_settings()
+    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_fallback_model)
+
+
 @llm_retry
 def _generate_queries(topic: str, query_angle: QueryAngle, llm: ChatGroq) -> list[str]:
     """Ask the LLM to produce 5 search queries biased toward the given angle."""
@@ -130,7 +135,15 @@ def run(state: ResearchState, query_angle: QueryAngle = "general") -> ResearchSt
                      query generation bias.
     """
     llm = _build_llm()
-    queries = _generate_queries(state.topic, query_angle, llm)
+    try:
+        queries = _generate_queries(state.topic, query_angle, llm)
+    except Exception:
+        logger.warning(
+            "[%s] Primary model throttled — falling back to %s",
+            query_angle.upper(),
+            get_settings().groq_fallback_model,
+        )
+        queries = _generate_queries(state.topic, query_angle, _build_fallback_llm())
 
     seen_urls: set[str] = set()
     sources: list[RawSource] = []

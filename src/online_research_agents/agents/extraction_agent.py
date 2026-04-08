@@ -30,6 +30,11 @@ def _build_llm() -> ChatGroq:
     return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model)
 
 
+def _build_fallback_llm() -> ChatGroq:
+    settings = get_settings()
+    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_fallback_model)
+
+
 def _build_source_block(state: ResearchState) -> str:
     """
     Concatenate raw source texts, each prefixed with its URL.
@@ -109,7 +114,14 @@ def run(state: ResearchState) -> ResearchState:
         len(source_block),
     )
 
-    claims = _extract_claims(source_block, state.topic, state.num_claims, llm)
+    try:
+        claims = _extract_claims(source_block, state.topic, state.num_claims, llm)
+    except Exception:
+        logger.warning(
+            "Primary model throttled — falling back to %s",
+            get_settings().groq_fallback_model,
+        )
+        claims = _extract_claims(source_block, state.topic, state.num_claims, _build_fallback_llm())
 
     if len(claims) != state.num_claims:
         logger.warning(

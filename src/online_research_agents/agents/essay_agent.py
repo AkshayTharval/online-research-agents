@@ -23,6 +23,11 @@ def _build_llm() -> ChatGroq:
     return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_model)
 
 
+def _build_fallback_llm() -> ChatGroq:
+    settings = get_settings()
+    return ChatGroq(api_key=settings.groq_api_key, model=settings.groq_fallback_model)
+
+
 def _build_citation_list(verified_claims: list[VerifiedClaim]) -> dict[int, VerifiedClaim]:
     """Map citation number → VerifiedClaim for inline reference building."""
     return {i: claim for i, claim in enumerate(verified_claims, start=1)}
@@ -110,7 +115,14 @@ def run(state: ResearchState) -> ResearchState:
     facts_block = _build_facts_block(citations)
 
     logger.info("Sending %d facts to LLM for essay composition...", len(citations))
-    essay_body = _write_essay(state.topic, facts_block, len(verified_only), _build_llm())
+    try:
+        essay_body = _write_essay(state.topic, facts_block, len(verified_only), _build_llm())
+    except Exception:
+        logger.warning(
+            "Primary model throttled — falling back to %s",
+            get_settings().groq_fallback_model,
+        )
+        essay_body = _write_essay(state.topic, facts_block, len(verified_only), _build_fallback_llm())
 
     references = _build_references_section(citations)
     full_essay = essay_body + "\n" + references
