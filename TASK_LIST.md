@@ -93,7 +93,7 @@
 ---
 
 ## Task 7 — Wire agents into a LangGraph state graph
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/graph.py`
