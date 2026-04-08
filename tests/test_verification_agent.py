@@ -4,7 +4,11 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 from online_research_agents.agents import verification_agent
-from online_research_agents.agents.verification_agent import _extract_domain, _verify_claim
+from online_research_agents.agents.verification_agent import (
+    _extract_domain,
+    _is_topically_relevant,
+    _verify_claim,
+)
 from online_research_agents.models import (
     Claim,
     ResearchState,
@@ -33,8 +37,32 @@ def _make_state(claims: list[Claim] | None = None) -> ResearchState:
     )
 
 
-def _ddg_result(url: str) -> dict:
-    return {"href": url, "title": "Result", "body": "Snippet"}
+def _ddg_result(url: str, title: str = "Global temps rose pre-industrial climate", body: str = "Global temperatures have risen since pre-industrial times due to climate change") -> dict:
+    """Return a DDG result dict. Default title/body contains keywords matching _make_claim()."""
+    return {"href": url, "title": title, "body": body}
+
+
+# ---------------------------------------------------------------------------
+# _is_topically_relevant
+# ---------------------------------------------------------------------------
+
+class TestIsTopicallyRelevant:
+    def test_relevant_when_keywords_match(self):
+        result = {"title": "MS Dhoni cricket debut India", "body": "Dhoni made his cricket debut in 2004"}
+        assert _is_topically_relevant(result, "MS Dhoni made his international cricket debut in 2004") is True
+
+    def test_irrelevant_when_no_keywords_match(self):
+        """mayoclinic MS=multiple-sclerosis should not corroborate an MS Dhoni cricket claim."""
+        result = {"title": "Multiple sclerosis symptoms causes", "body": "MS is a disease affecting the nervous system"}
+        assert _is_topically_relevant(result, "MS Dhoni made his international cricket debut in 2004") is False
+
+    def test_allows_when_no_result_text(self):
+        """If result has no title/body we can't disqualify it — allow."""
+        assert _is_topically_relevant({"title": "", "body": ""}, "some claim about cricket") is True
+
+    def test_allows_when_claim_has_no_meaningful_words(self):
+        """Very short/stopword-only claim — cannot check, allow."""
+        assert _is_topically_relevant({"title": "anything", "body": "text"}, "and the") is True
 
 
 # ---------------------------------------------------------------------------

@@ -50,12 +50,51 @@ def _search_corroboration(query: str, max_results: int = MAX_RESULTS_PER_CLAIM) 
     return results
 
 
+_STOPWORDS: frozenset[str] = frozenset({
+    "the", "and", "for", "are", "was", "that", "with", "from", "has", "have",
+    "been", "this", "they", "their", "also", "its", "but", "not", "who",
+    "which", "when", "will", "his", "her", "made", "over", "more", "some",
+    "such", "into", "than", "then", "only", "said", "were", "about", "after",
+})
+
+
+def _is_topically_relevant(result: dict, claim_text: str) -> bool:
+    """
+    Return True if the result title/snippet shares at least 2 meaningful
+    keywords with the claim text.
+
+    This prevents false-positive corroboration where DuckDuckGo returns an
+    unrelated page that happens to be on a different domain — e.g. a search
+    for 'MS Dhoni' returning mayoclinic.org because 'MS' matches
+    'Multiple Sclerosis'.
+    """
+    meaningful_words = [
+        w.strip(".,;:!?\"'()").lower()
+        for w in claim_text.split()
+        if len(w) > 3 and w.strip(".,;:!?\"'()").lower() not in _STOPWORDS
+    ]
+    if not meaningful_words:
+        return True  # nothing to compare against — allow
+
+    result_text = (
+        (result.get("title") or "") + " " + (result.get("body") or "")
+    ).lower()
+
+    if not result_text.strip():
+        return True  # no snippet text — allow (can't disqualify)
+
+    matches = sum(1 for w in meaningful_words if w in result_text)
+    threshold = min(2, len(meaningful_words))
+    return matches >= threshold
+
+
 def _find_cross_domain_result(
-    results: list[dict], source_domain: str
+    results: list[dict], source_domain: str, claim_text: str
 ) -> str | None:
     """
     Scan DuckDuckGo results for the first URL whose domain differs from
-    source_domain. Returns the URL string or None.
+    source_domain AND whose title/snippet is topically relevant to the claim.
+    Returns the URL string or None.
     """
     for result in results:
         url: str = result.get("href", "")
@@ -63,7 +102,8 @@ def _find_cross_domain_result(
             continue
         result_domain = _extract_domain(url)
         if result_domain and result_domain != source_domain:
-            return url
+            if _is_topically_relevant(result, claim_text):
+                return url
     return None
 
 
@@ -98,7 +138,7 @@ def _verify_claim(claim: Claim) -> VerifiedClaim:
             )
             continue
 
-        corroboration_url = _find_cross_domain_result(results, claim.source_domain)
+        corroboration_url = _find_cross_domain_result(results, claim.source_domain, claim.claim)
 
         if corroboration_url:
             corroboration_domain = _extract_domain(corroboration_url)
