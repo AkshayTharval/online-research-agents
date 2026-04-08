@@ -31,7 +31,7 @@
 ---
 
 ## Task 3 — Implement Search Agent
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/agents/search_agent.py`
