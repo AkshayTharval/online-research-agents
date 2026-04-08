@@ -19,7 +19,7 @@
 ---
 
 ## Task 2 — Implement retry utility module
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `src/online_research_agents/retry.py`
