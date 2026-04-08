@@ -118,22 +118,6 @@
 
 ---
 
-## Task 8 — Add CLI entrypoint
-**Status:** TODO
-
-**What's included:**
-- `src/online_research_agents/main.py`
-- Uses `argparse` to accept:
-  - `--topic TEXT` (required) — the research topic
-  - `--num-claims INT` (optional, default 8) — number of claims to extract
-- Loads `.env` via `python-dotenv`
-- Instantiates `ResearchState(topic=..., num_claims=...)`
-- Calls `build_graph().invoke(state)`
-- Pretty-prints the final essay and verification summary to stdout
-- Entry point registered in `pyproject.toml` as `research` script
-
----
-
 ## Task 9 — Write pytest unit tests
 **Status:** TODO
 
@@ -205,3 +189,21 @@
   - Agent node functions emit structured log messages at key steps; `StreamlitLogHandler` intercepts these to drive the live UI updates
   - No page reload required — uses `st.rerun()` only after full pipeline completion
   - Launched via: `uv run streamlit run src/online_research_agents/ui.py`
+
+---
+
+## Task 13 — Add CLI entrypoint _(deprioritised — UI covers primary use case)_
+**Status:** TODO
+
+**Why deprioritised:** The Streamlit UI (Task 12) is the primary interface. The CLI is useful for scripting, automation, and debugging but is not needed for the system to be fully functional and demonstrable.
+
+**What's included:**
+- `src/online_research_agents/main.py`
+- Uses `argparse` to accept:
+  - `--topic TEXT` (required) — the research topic
+  - `--num-claims INT` (optional, default 8) — number of claims to extract
+- Loads `.env` via `python-dotenv`
+- Calls `run_pipeline(topic, num_claims)` from `graph.py`
+- Pretty-prints the final essay as plain text to stdout
+- Prints a verification summary table: claim | VERIFIED/UNVERIFIED | corroboration domain
+- Entry point registered in `pyproject.toml` as `research` script
