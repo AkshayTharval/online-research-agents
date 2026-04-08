@@ -154,7 +154,40 @@
 - Project overview and architecture diagram (ASCII)
 - Prerequisites: Python 3.11+, `uv`
 - Setup steps: `uv venv`, `uv pip install -e ".[dev]"`, copy `.env.example` to `.env`, add Groq API key
-- How to run: `uv run research --topic "your topic" --num-claims 8`
+- How to run CLI: `uv run research --topic "your topic" --num-claims 8`
+- How to run the Streamlit UI: `uv run streamlit run src/online_research_agents/ui.py`
 - How to run tests: `uv run pytest` (unit) and `uv run pytest -m integration` (integration)
 - Description of each agent and the LangGraph flow
 - Notes on rate limits, retry behavior, and Groq free tier constraints
+
+---
+
+## Task 12 — Build Streamlit web UI
+**Status:** TODO
+
+**What's included:**
+- Add `streamlit>=1.40.0` to `pyproject.toml` dependencies
+- `src/online_research_agents/ui.py` — Streamlit single-page app
+- **Input panel (sidebar):**
+  - Text input for research topic (required)
+  - Number input for `num_claims` (default 8, min 1, max 20)
+  - "Run Research" button to start the pipeline
+- **Live progress display (main area):**
+  - A custom `logging.Handler` subclass (`StreamlitLogHandler`) that captures log records emitted by all agents and appends them in real-time to a `st.container()` as color-coded messages:
+    - `INFO` → normal text
+    - `WARNING` → orange/amber text
+    - `ERROR` → red text
+  - Four collapsible `st.expander` sections, one per agent, that expand automatically as each agent runs:
+    - **Search Agent:** shows each source URL as it is collected, with domain and character count
+    - **Extraction Agent:** shows each extracted claim with its source URL as a bullet list
+    - **Verification Agent:** shows a live table row per claim with VERIFIED (green) / UNVERIFIED (red) badge and corroboration URL
+    - **Essay Writer Agent:** shows a spinner while writing, then renders the final essay in a styled `st.markdown` block
+- **Final output section:**
+  - Full essay rendered as Markdown
+  - Verification summary table: claim text | status badge | original source | corroboration source
+  - Download button to save the essay as a `.txt` file
+- **Implementation details:**
+  - Pipeline runs in the same thread using `build_graph().invoke(state)` — Streamlit re-renders after each agent completes via `st.session_state`
+  - Agent node functions emit structured log messages at key steps; `StreamlitLogHandler` intercepts these to drive the live UI updates
+  - No page reload required — uses `st.rerun()` only after full pipeline completion
+  - Launched via: `uv run streamlit run src/online_research_agents/ui.py`
