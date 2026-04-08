@@ -97,15 +97,7 @@ This opens **http://localhost:8501** in your browser automatically.
 
 ![Streamlit UI Screenshot](docs/screenshots/ui.png)
 
-> **Note:** Screenshot will be added after the UI (Task 12) is complete and the app has been run end-to-end.
-
-The UI shows:
-- **Sidebar** — topic input + number of claims slider + Run button
-- **Search Agent** expander — each source URL as it is collected (domain + char count)
-- **Extraction Agent** expander — each extracted claim as a bullet with source
-- **Verification Agent** expander — live table with VERIFIED / UNVERIFIED badges
-- **Essay Writer** expander — spinner while writing, then the full cited essay
-- **Final output** — essay as rendered Markdown + verification summary table + download button
+The UI shows live output from each agent as the pipeline runs — sources being collected, claims being extracted, verification results, and the final essay with citations.
 
 ---
 
@@ -113,7 +105,7 @@ The UI shows:
 
 **Unit tests** (no API calls, fast):
 ```bash
-pytest                          # default — runs 59 unit tests only
+pytest
 ```
 
 **Integration test** (real Groq API + real DuckDuckGo, ~60–120s):
@@ -131,7 +123,7 @@ The integration test requires `GROQ_API_KEY` in `.env` and internet access. It i
 online-research-agents/
 ├── .env.example                          # Copy to .env, add your Groq key
 ├── pyproject.toml                        # Dependencies + build config
-├── LOW_LEVEL_DESIGN.md                   # Detailed architecture document
+├── LOW_LEVEL_DESIGN.md                   # Full architecture + debugging guide
 ├── TASK_LIST.md                          # Build task tracker
 │
 ├── src/online_research_agents/
@@ -157,34 +149,4 @@ online-research-agents/
 
 ---
 
-## Retry Behaviour
-
-All LLM and web calls use `tenacity` retry logic:
-
-| Call type | Max attempts | Backoff | Catches |
-|---|---|---|---|
-| Groq LLM | 5 | 2s → 16s exponential | `RateLimitError`, `APIStatusError` |
-| DuckDuckGo / scraping | 3 | 1s → 4s exponential | `httpx`, `requests` transient errors |
-
-Each retry is logged with the attempt number and wait duration.
-
----
-
-## Groq Free Tier Notes
-
-- Model used: `llama-3.3-70b-versatile`
-- Free tier has rate limits (requests per minute / tokens per day)
-- The retry logic handles transient `429 Rate Limit` errors automatically
-- For a topic with `--num-claims 8`, the pipeline makes ~4 LLM calls total
-- If you hit persistent rate limits, reduce `num_claims` or wait a minute and retry
-
----
-
-## Key Design Decisions
-
-- **Parallel search workers** — three agents run concurrently (news / academic / general angle), each collecting ≥5 sources, merged and deduplicated before extraction. Reduces search phase time by ~3×.
-- **Structured LLM output** — `langchain_groq.with_structured_output()` guarantees typed `list[Claim]` back from the LLM; no regex or JSON parsing.
-- **Cross-domain verification** — a claim from `bbc.com` corroborated only by another `bbc.com` URL is marked UNVERIFIED. Corroboration must come from a different domain.
-- **Shared retry utility** — `retry.py` is the single source of truth for all retry logic; no duplication across agents.
-
-For a full architecture deep-dive, see [LOW_LEVEL_DESIGN.md](LOW_LEVEL_DESIGN.md).
+For a full architecture and debugging guide, see [LOW_LEVEL_DESIGN.md](LOW_LEVEL_DESIGN.md).

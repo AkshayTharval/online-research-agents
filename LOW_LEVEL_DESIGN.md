@@ -666,3 +666,165 @@ Verification is slower per-claim but bounded — `num_claims` is typically small
 
 **Why Streamlit for the UI instead of Flask/FastAPI + React?**
 Streamlit lets us write the entire UI in Python with zero JavaScript. Since all agents already use Python's `logging` module, a single custom `logging.Handler` intercepts every log line and routes it to the correct UI section — no additional instrumentation in the agent code is required. A Flask + React approach would need a websocket layer, a separate frontend build step, and frontend code, all for the same result.
+
+---
+
+## 12. Debugging Guide
+
+### 12.1 Reading Log Output
+
+Every agent uses Python's standard `logging` module with a consistent format. Enable verbose logging by setting the log level before running:
+
+```python
+import logging
+logging.basicConfig(level=logging.DEBUG)
+```
+
+Or in the Streamlit UI, all `INFO` and `WARNING` lines are automatically surfaced per agent section via `StreamlitLogHandler` — no extra setup needed.
+
+**Log line format:**
+
+```
+[LEVEL] module_name: message
+```
+
+**Key log patterns to watch for:**
+
+| Log message | What it means |
+|---|---|
+| `=== Search Agent [NEWS] starting ===` | Parallel search worker started |
+| `[NEWS] Generated 5 queries for topic '...'` | LLM successfully generated queries |
+| `[NEWS] Collected source 3: bbc.com (4231 chars)` | Successfully scraped a source |
+| `[NEWS] Only collected 3/5 sources — proceeding anyway` | Worker fell short; merger may still hit 15 total |
+| `=== merge_sources: combining parallel search results ===` | Fan-in node fired after all 3 workers finished |
+| `=== merge_sources complete: 14 unique sources from 16 total ===` | 2 duplicate URLs removed across workers |
+| `Extracting 8 claims from 14 sources (38420 chars total)` | Extraction Agent about to call LLM |
+| `Expected 8 claims, got 6 — proceeding with what was returned` | LLM returned fewer claims than requested |
+| `VERIFIED: 'Global temps rose...' — corroborated by reuters.com` | Cross-domain source found |
+| `UNVERIFIED: 'CO2 levels...' — no cross-domain source found` | No independent source found for this claim |
+| `Verification complete: 5/8 claims verified` | Summary before essay writing |
+| `No verified claims available — writing insufficient-info message` | All claims failed verification |
+
+---
+
+### 12.2 Debugging the Retry Behaviour
+
+Each retry emits a `WARNING` log with the attempt number and wait duration:
+
+```
+WARNING retry: Retry attempt 1 | waiting 2.0s | reason: RateLimitError: ...
+WARNING retry: Retry attempt 2 | waiting 4.0s | reason: RateLimitError: ...
+```
+
+**Retry configuration at a glance:**
+
+| Decorator | Max attempts | Backoff range | Exceptions caught |
+|---|---|---|---|
+| `@llm_retry` | 5 | 2s → 16s (exponential) | `groq.RateLimitError`, `groq.APIStatusError` |
+| `@web_retry` | 3 | 1s → 4s (exponential) | `httpx.HTTPError`, `httpx.TimeoutException`, `requests.RequestException` |
+
+**If you see persistent `RateLimitError` retries:**
+- Groq free tier has per-minute token limits; 5 retries × 16s = ~80s of waiting before giving up
+- Reduce `num_claims` (fewer LLM calls needed for extraction)
+- Wait 60s and try again — the rate limit window resets
+
+**If you see persistent `web_retry` retries:**
+- DuckDuckGo occasionally blocks rapid requests — the 1.5s `SEARCH_DELAY` in the Verification Agent mitigates this
+- Try a different network or add a VPN if DuckDuckGo is consistently rejecting requests
+- Check `trafilatura` failures: some sites (paywalls, JS-heavy pages) will always return `None` — this is expected and logged at `DEBUG` level
+
+---
+
+### 12.3 Debugging Individual Agents in Isolation
+
+Each agent's `run()` function accepts a `ResearchState` directly, so you can test any stage independently in a Python REPL or script without running the full graph:
+
+```python
+from online_research_agents.models import ResearchState, RawSource
+from online_research_agents.agents import search_agent, extraction_agent
+
+# Test Search Agent alone
+state = ResearchState(topic="quantum computing", num_claims=5)
+result = search_agent.run(state, query_angle="academic")
+print(f"Sources collected: {len(result.raw_sources)}")
+for s in result.raw_sources:
+    print(f"  {s.domain}: {len(s.text)} chars")
+
+# Test Extraction Agent alone with hand-crafted sources
+state_with_sources = ResearchState(
+    topic="quantum computing",
+    num_claims=3,
+    raw_sources=[
+        RawSource(
+            url="https://example.com/article",
+            domain="example.com",
+            text="Quantum computers use qubits instead of classical bits...",
+        )
+    ],
+)
+result = extraction_agent.run(state_with_sources)
+for claim in result.claims:
+    print(claim.claim)
+```
+
+---
+
+### 12.4 Inspecting the LangGraph Topology
+
+Print the compiled graph's ASCII topology at runtime to verify the parallel wiring:
+
+```python
+from online_research_agents.graph import build_graph
+graph = build_graph()
+print(graph.get_graph().draw_ascii())
+```
+
+Expected output:
+
+```
+                +-----------+
+                | __start__ |
+                +-----------+
+          *****/      |      \*****
+         *            |            *
+        *             |             *
++-------------+ +----------------+ +--------------+
+| search_news | | search_academic| | search_general|
++-------------+ +----------------+ +--------------+
+          *****\      |      /*****
+               \      |      /
+                \      |      /
+           +----------------+
+           | merge_sources  |
+           +----------------+
+                    |
+                +-------+
+                | extract|
+                +-------+
+                    |
+                +-------+
+                | verify |
+                +-------+
+                    |
+                +-------+
+                |  write |
+                +-------+
+                    |
+               +---------+
+               | __end__ |
+               +---------+
+```
+
+---
+
+### 12.5 Common Failure Modes and Fixes
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `ValidationError: GROQ_API_KEY missing` | `.env` file not found or key not set | Run `cp .env.example .env` and add your key |
+| `groq.RateLimitError` after 5 retries | Groq free tier rate limit exhausted | Wait 60s, reduce `num_claims`, or upgrade Groq plan |
+| `len(raw_sources) < 15` after merge | DuckDuckGo rate limiting or too many paywalled pages | Try a broader topic; retry after 30s |
+| All claims UNVERIFIED | DuckDuckGo returning same-domain results only | Try a more specific topic; increase `num_claims` to give more chances |
+| Essay = INSUFFICIENT_INFO_MSG | Zero verified claims | See "all claims UNVERIFIED" above |
+| `TypeError: unhashable type` in graph | Wrong state schema passed to `StateGraph` | Ensure `_GraphState(TypedDict)` is used, not a plain `dict` |
+| `pydantic_core.ValidationError: num_claims >= 1` | `num_claims=0` passed | Minimum is 1; UI slider should prevent this |
