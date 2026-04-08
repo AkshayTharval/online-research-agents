@@ -118,46 +118,65 @@ def _render_sidebar() -> tuple[str, int]:
 def _run_with_live_output(topic: str, num_claims: int) -> ResearchState:
     """
     Execute the pipeline while streaming log output into per-agent
-    Streamlit expanders in real time via StreamlitLogHandler.
+    st.status() sections in real time via StreamlitLogHandler.
+
+    st.status() is used instead of st.expander() because it supports
+    real-time streaming writes during a blocking call; expander.container()
+    does not reliably flush intermediate writes.
     """
     st.subheader("Pipeline Progress")
 
-    # Create all four agent sections upfront so they're visible immediately.
-    # Using st.expander keeps them always present; expanded=True shows content live.
-    search_exp  = st.expander("🔍 Search Agent — collecting sources", expanded=True)
-    extract_exp = st.expander("📋 Extraction Agent — extracting claims", expanded=True)
-    verify_exp  = st.expander("✅ Verification Agent — cross-checking claims", expanded=True)
-    essay_exp   = st.expander("✍️ Essay Writer — composing essay", expanded=True)
+    # st.status() is designed for live streaming output — each section
+    # shows a spinner while running and a tick when marked complete.
+    search_status  = st.status("🔍 Search Agent — collecting sources",       expanded=True)
+    extract_status = st.status("📋 Extraction Agent — extracting claims",     expanded=True)
+    verify_status  = st.status("✅ Verification Agent — cross-checking claims", expanded=True)
+    essay_status   = st.status("✍️ Essay Writer — composing essay",           expanded=True)
 
-    search_log  = search_exp.container(height=300)
-    extract_log = extract_exp.container(height=250)
-    verify_log  = verify_exp.container(height=300)
-    essay_log   = essay_exp.container(height=200)
-
-    # Graph-level banners (=== Agent starting ===) go to a top-level area
-    graph_log = st.container()
+    # Scrollable inner containers so each section stays a fixed height
+    search_log  = search_status.container(height=300)
+    extract_log = extract_status.container(height=250)
+    verify_log  = verify_status.container(height=300)
+    essay_log   = essay_status.container(height=200)
 
     containers = {
         "search":  search_log,
         "extract": extract_log,
         "verify":  verify_log,
         "write":   essay_log,
-        "graph":   graph_log,
+        # graph-level banners (=== starting/complete ===) go here
+        "graph":   st.container(),
     }
 
-    # Attach handler to root logger
+    # Suppress noisy third-party library loggers (httpx, trafilatura, groq, etc.)
+    # before attaching our handler so they never reach the UI.
+    _NOISY_LOGGERS = ["httpx", "httpcore", "trafilatura", "urllib3",
+                      "groq", "_client", "charset_normalizer", "LangChain"]
+    original_levels: dict[str, int] = {}
+    for name in _NOISY_LOGGERS:
+        lg = logging.getLogger(name)
+        original_levels[name] = lg.level
+        lg.setLevel(logging.WARNING)
+
     handler = StreamlitLogHandler(containers)
     root = logging.getLogger()
-    original_level = root.level
+    original_root_level = root.level
     root.setLevel(logging.INFO)
     root.addHandler(handler)
 
     try:
-        with st.spinner("Running research pipeline — this takes 2–4 minutes..."):
-            result = run_pipeline(topic=topic, num_claims=num_claims)
+        result = run_pipeline(topic=topic, num_claims=num_claims)
     finally:
         root.removeHandler(handler)
-        root.setLevel(original_level)
+        root.setLevel(original_root_level)
+        for name, level in original_levels.items():
+            logging.getLogger(name).setLevel(level)
+
+    # Mark all status sections complete
+    search_status.update(label="🔍 Search Agent — done",        state="complete", expanded=False)
+    extract_status.update(label="📋 Extraction Agent — done",   state="complete", expanded=False)
+    verify_status.update(label="✅ Verification Agent — done",  state="complete", expanded=False)
+    essay_status.update(label="✍️ Essay Writer — done",         state="complete", expanded=False)
 
     return result
 
@@ -246,7 +265,6 @@ def main() -> None:
 
     if run and topic:
         st.session_state["result"] = None  # clear previous run
-        st.info(f'Starting research on **"{topic}"** with {num_claims} claims...')
         result = _run_with_live_output(topic, num_claims)
         st.session_state["result"] = result
         st.success("✅ Research complete!")
