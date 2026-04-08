@@ -144,7 +144,7 @@
 ---
 
 ## Task 11 — Write README
-**Status:** TODO
+**Status:** DONE
 
 **What's included:**
 - `README.md`
